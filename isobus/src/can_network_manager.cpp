@@ -1133,8 +1133,12 @@ namespace isobus
 			{
 				for (auto &tableEntry : controlFunctionTable[channelIndex])
 				{
+					// Partnered CFs are exempt. A partner is a CF the application explicitly bound to and is talking to,
+					// and one missed request for address claim should not take it away in the middle of a session.
+					// Losing a partner is detected by the protocol that uses it instead, such as the VT and TC clients' status timeouts.
 					if ((nullptr == tableEntry) ||
-					    (tableEntry->claimedAddressSinceLastAddressClaimRequest))
+					    (tableEntry->claimedAddressSinceLastAddressClaimRequest) ||
+					    (ControlFunction::Type::Partnered == tableEntry->get_type()))
 					{
 						continue;
 					}
