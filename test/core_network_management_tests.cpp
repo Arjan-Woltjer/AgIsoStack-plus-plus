@@ -32,6 +32,22 @@ class CoreTest : public AgIsoStackTestFixture
 	// Wrapper to give tests a more meaningful name - no content.
 };
 
+static CANMessageFrame create_address_claim_frame(std::uint8_t channel, std::uint8_t address, const NAME &name)
+{
+	CANMessageFrame addressClaim = {};
+	addressClaim.channel = channel;
+	addressClaim.identifier = 0x18EEFF00 | address;
+	addressClaim.isExtendedFrame = true;
+	addressClaim.dataLength = 8;
+
+	const std::uint64_t fullName = name.get_full_name();
+	for (std::uint8_t byteIndex = 0; byteIndex < addressClaim.dataLength; byteIndex++)
+	{
+		addressClaim.data[byteIndex] = static_cast<std::uint8_t>(fullName >> (8 * byteIndex));
+	}
+	return addressClaim;
+}
+
 TEST_F(CoreTest, TestCreateAndDestroyPartners)
 {
 	std::vector<isobus::NAMEFilter> vtNameFilters;
@@ -348,6 +364,49 @@ TEST_F(CoreTest, PartnerCreatedAfterExternalClaimHasValidAddress)
 	EXPECT_EQ(claimedName.get_full_name(), partner->get_NAME().get_full_name());
 
 	isobus::CANNetworkManager::CANNetwork.deactivate_control_function(partner);
+}
+
+TEST_F(CoreTest, PartnerCreatedInsideAddressClaimRequestWindowIsNotPruned)
+{
+	constexpr std::uint8_t TEST_CHANNEL = 3;
+	constexpr std::uint8_t CLAIMED_ADDRESS = 0x97;
+	CANNetworkManager::CANNetwork.update();
+	time_source.update_for_ms(250); // A request timestamp of 0 would mean "no request pending"
+
+	const NAME claimedName = test_helpers::find_available_name(TEST_CHANNEL);
+	CANNetworkManager::CANNetwork.process_receive_can_message_frame(create_address_claim_frame(TEST_CHANNEL, CLAIMED_ADDRESS, claimedName));
+	CANNetworkManager::CANNetwork.update();
+
+	// A global request for address claim, which the external CF answers right away
+	CANMessageFrame request = test_helpers::create_message_frame_pgn_request(0xEE00, nullptr, nullptr);
+	request.channel = TEST_CHANNEL;
+	CANNetworkManager::CANNetwork.process_receive_can_message_frame(request);
+	CANNetworkManager::CANNetwork.process_receive_can_message_frame(create_address_claim_frame(TEST_CHANNEL, CLAIMED_ADDRESS, claimedName));
+	CANNetworkManager::CANNetwork.update();
+
+	// Only now, while that request's timer is still running, the application creates a partner for the CF
+	std::vector<NAMEFilter> nameFilters{
+		NAMEFilter(NAME::NAMEParameters::IdentityNumber, claimedName.get_identity_number()),
+		NAMEFilter(NAME::NAMEParameters::ManufacturerCode, claimedName.get_manufacturer_code()),
+		NAMEFilter(NAME::NAMEParameters::FunctionCode, claimedName.get_function_code()),
+		NAMEFilter(NAME::NAMEParameters::FunctionInstance, claimedName.get_function_instance()),
+		NAMEFilter(NAME::NAMEParameters::EcuInstance, claimedName.get_ecu_instance()),
+		NAMEFilter(NAME::NAMEParameters::DeviceClass, claimedName.get_device_class()),
+		NAMEFilter(NAME::NAMEParameters::DeviceClassInstance, claimedName.get_device_class_instance()),
+		NAMEFilter(NAME::NAMEParameters::IndustryGroup, claimedName.get_industry_group()),
+		NAMEFilter(NAME::NAMEParameters::ArbitraryAddressCapable, claimedName.get_arbitrary_address_capable())
+	};
+	auto partner = CANNetworkManager::CANNetwork.create_partnered_control_function(TEST_CHANNEL, nameFilters);
+	ASSERT_NE(nullptr, partner);
+	ASSERT_TRUE(partner->get_address_valid());
+
+	// The CF answered the request, so the partner must survive the prune when the request's timer runs out
+	time_source.update_for_ms(1000);
+	CANNetworkManager::CANNetwork.update();
+	EXPECT_TRUE(partner->get_address_valid());
+	EXPECT_EQ(CLAIMED_ADDRESS, partner->get_address());
+
+	CANNetworkManager::CANNetwork.deactivate_control_function(partner);
 }
 
 TEST_F(CoreTest, SimilarControlFunctions)

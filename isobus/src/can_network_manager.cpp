@@ -892,6 +892,9 @@ namespace isobus
 						// Populate the partner's data
 						partner->address = currentActiveControlFunction->get_address();
 						partner->controlFunctionNAME = currentActiveControlFunction->get_NAME();
+						// The CF we replace may already have answered a pending request for address claim.
+						// Keep that, or the partner is pruned when that request's timer runs out even though it claimed.
+						partner->claimedAddressSinceLastAddressClaimRequest = currentActiveControlFunction->claimedAddressSinceLastAddressClaimRequest;
 						partner->initialized = true;
 						controlFunctionTable[partner->get_can_port()][partner->address] = std::shared_ptr<ControlFunction>(partner);
 						process_control_function_state_change_callback(partner, ControlFunctionState::Online);
