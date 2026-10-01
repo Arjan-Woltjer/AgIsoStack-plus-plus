@@ -7,6 +7,7 @@
 /// @copyright 2023 The Open-Agriculture Developers
 //================================================================================================
 
+#if defined(__IMXRT1062__) || defined(__MK20DX256__) || defined(__MK64FX512__) || defined(__MK66FX1M0__)
 #include "isobus/hardware_integration/flex_can_t4_plugin.hpp"
 #include "FlexCAN_T4.hpp"
 #include "isobus/isobus/can_stack_logger.hpp"
@@ -129,3 +130,4 @@ namespace isobus
 		return retVal;
 	}
 }
+#endif // Teensy 3.2/3.5/3.6/4.x
