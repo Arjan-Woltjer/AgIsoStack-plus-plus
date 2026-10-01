@@ -231,14 +231,16 @@ TEST_F(CoreTest, InvalidatingControlFunctions)
 	  nullptr));
 	CANNetworkManager::CANNetwork.update();
 
-	// Now, if we wait a while, that partner didn't claim again, so it should be invalid.
+	// Now, if we wait a while, that partner didn't claim again. Partnered CFs are exempt from the prune
+	// (see prune_inactive_control_functions()), so it should still be valid and online.
+	// Pruning of other CFs is covered by RestoredControlFunctionSurvivesTheNextPrune.
 	time_source.update_for_ms(2000);
 	CANNetworkManager::CANNetwork.update();
 
-	EXPECT_FALSE(testPartner->get_address_valid());
-	EXPECT_TRUE(wasTestStateCallbackHit);
-	EXPECT_NE(testControlFunction, nullptr);
-	EXPECT_EQ(testControlFunctionState, ControlFunctionState::Offline);
+	// Non-partnered CFs left on the bus by earlier tests are still pruned by this request and may hit the
+	// callback, so only check that the callback did not report the partner going offline.
+	EXPECT_TRUE(testPartner->get_address_valid());
+	EXPECT_FALSE(wasTestStateCallbackHit && (testControlFunction == testPartner));
 
 	CANNetworkManager::CANNetwork.remove_control_function_status_change_callback(test_control_function_state_callback);
 	testControlFunction.reset();

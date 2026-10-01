@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include "isobus/isobus/can_network_manager.hpp"
 #include "isobus/utility/system_timing.hpp"
 #include "test_time_source.hpp"
 
@@ -27,6 +28,12 @@ public:
 
 	void TearDown() override
 	{
+		// Partnered CFs are exempt from the address claim prune, so a partner a test leaves behind
+		// would keep its address occupied for every later test on the same channel.
+		for (const auto &partner : isobus::CANNetworkManager::CANNetwork.get_partnered_control_functions())
+		{
+			isobus::CANNetworkManager::CANNetwork.deactivate_control_function(partner);
+		}
 		isobus::SystemTiming::override_time_source(nullptr);
 	}
 
