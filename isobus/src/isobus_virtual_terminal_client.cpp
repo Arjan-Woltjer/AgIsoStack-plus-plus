@@ -1139,6 +1139,11 @@ namespace isobus
 		return yPixels;
 	}
 
+	VirtualTerminalClient::StateMachineState VirtualTerminalClient::get_state() const
+	{
+		return state;
+	}
+
 	VirtualTerminalClient::VTVersion VirtualTerminalClient::get_connected_vt_version() const
 	{
 		VTVersion retVal;
