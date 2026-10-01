@@ -6,6 +6,7 @@
 ///
 /// @copyright 2023 Adrian Del Grosso
 //================================================================================================
+#if !defined CAN_STACK_DISABLE_THREADS && !defined ARDUINO
 #include "isobus/isobus/isobus_virtual_terminal_server.hpp"
 #include "isobus/isobus/can_general_parameter_group_numbers.hpp"
 #include "isobus/isobus/can_message.hpp"
@@ -2974,3 +2975,4 @@ namespace isobus
 		}
 	}
 }
+#endif // !defined CAN_STACK_DISABLE_THREADS && !defined ARDUINO
