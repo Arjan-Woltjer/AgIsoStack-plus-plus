@@ -381,8 +381,15 @@ namespace isobus
 				for (std::uint8_t i = 0; i < hardwareChannels.size(); i++)
 				{
 #if defined CAN_STACK_DISABLE_THREADS || defined ARDUINO
-					// If we don't have threads, we need to poll the hardware for messages here
-					hardwareChannels[i]->receive_can_frame();
+					// If we don't have threads, we need to poll the hardware for messages here.
+					// Take everything the driver holds, not one frame per update: with one
+					// frame per call, a burst on the bus (several frames back to back) piles
+					// up in the controller, and a driver with few receive buffers drops the
+					// overflow whenever one update cycle is slower than the burst.
+					// receive_can_frame() stops when the driver is empty or the queue is full.
+					while (hardwareChannels[i]->receive_can_frame())
+					{
+					}
 #endif
 
 					isobus::CANMessageFrame frame;
