@@ -10,6 +10,8 @@
 #define FLEX_CAN_T4_PLUGIN_HPP
 
 #include "FlexCAN_T4.hpp"
+#include <cstddef>
+#include <cstdint>
 #include "isobus/hardware_integration/can_hardware_plugin.hpp"
 #include "isobus/isobus/can_hardware_abstraction.hpp"
 #include "isobus/isobus/can_message_frame.hpp"
@@ -51,7 +53,30 @@ namespace isobus
 		/// @returns `true` if the frame was written, otherwise `false`
 		bool write_frame(const isobus::CANMessageFrame &canFrame) override;
 
+		/// @brief The most frames the receive queue has held at once since open()
+		/// @returns The receive queue's high-water mark, in frames
+		std::size_t get_receive_queue_high_water() const;
+
+		/// @brief Frames dropped since open() because the receive queue was full
+		/// @returns The number of dropped frames
+		std::uint32_t get_receive_queue_overflow_count() const;
+
+		/// @brief How many frames the receive queue holds
+		static constexpr std::size_t RECEIVE_QUEUE_SIZE = 64;
+
 	private:
+		/// @brief Called from the FlexCAN FIFO interrupt: copies a frame into the receive queue
+		/// @param[in] message The frame the controller received
+		void queue_received_frame(const CAN_message_t &message);
+
+		/// @brief The interrupt-side receive handlers, one per FlexCAN channel
+		/// @param[in] message The frame the controller received
+		static void on_receive_channel_0(const CAN_message_t &message);
+		static void on_receive_channel_1(const CAN_message_t &message);
+		static void on_receive_channel_2(const CAN_message_t &message);
+
+		static FlexCANT4Plugin *openPlugins[3]; ///< The plugin that opened each channel, for the interrupt handlers
+
 #if defined(__IMXRT1062__)
 		static FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_512> can0;
 		static FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_512> can1;
@@ -62,6 +87,14 @@ namespace isobus
 #endif
 		std::uint8_t selectedChannel; ///< The channel that this plugin is assigned to
 		bool isOpen = false; ///< Tracks if the connection is open/connected
+
+		// Received frames, in arrival order: the FIFO interrupt writes (head), read_frame() reads (tail).
+		// Single producer, single consumer on one core, so the two indices are the only shared state.
+		CANMessageFrame receiveQueue[RECEIVE_QUEUE_SIZE]; ///< The frames themselves
+		volatile std::size_t receiveHead = 0; ///< Next slot the interrupt writes
+		volatile std::size_t receiveTail = 0; ///< Next slot read_frame() reads
+		volatile std::size_t receiveHighWater = 0; ///< The most frames held at once
+		volatile std::uint32_t receiveOverflowCount = 0; ///< Frames dropped on a full queue
 	};
 }
 #endif // FLEX_CAN_T4_PLUGIN_HPP
