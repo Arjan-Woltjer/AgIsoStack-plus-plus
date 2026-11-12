@@ -17,17 +17,33 @@
 #include <cstddef>
 #include <cstdint>
 
+#ifndef FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE
+/// @brief How many frames FlexCAN_T4 queues for sending, per controller, while every transmit
+/// mailbox is busy. One of FlexCAN_T4's sizes: 2, 4, 8 and so on up to 1024. Each frame takes
+/// 27 B of heap. A smaller queue suits a board with little RAM, such as the Teensy 3.2. When the
+/// queue is full, write_frame() returns `false`, and CANHardwareInterface keeps the frame in its
+/// own transmit queue and tries again on its next update(), so a burst such as an object pool
+/// upload takes longer.
+/// @details This value can be configured at build time, for example with -DFLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE=64
+#define FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE 512
+#endif
+
 namespace isobus
 {
-	/// @brief An interface for using FlexCAN_T4 on a Teensy4/4.1 device
-	/// @details The plugin receives through FlexCAN_T4's FIFO interrupt. Don't call `events()` on a
+	/// @brief An interface for using FlexCAN_T4 on a Teensy 4.0/4.1 or Teensy 3.2/3.5/3.6 device
+	/// @details The channel numbers name the controllers in order:
+	/// - Teensy 4.0/4.1: channel 0, 1 and 2 are CAN1, CAN2 and CAN3;
+	/// - Teensy 3.6: channel 0 and 1 are CAN0 and CAN1;
+	/// - Teensy 3.2/3.5: channel 0 is CAN0, the only controller.
+	///
+	/// The plugin receives through FlexCAN_T4's FIFO interrupt. Don't call `events()` on a
 	/// FlexCAN_T4 bus this plugin uses: once `events()` has been called, FlexCAN_T4 hands received
 	/// frames to the handler only from `events()`, and this plugin stops receiving without an error.
 	class FlexCANT4Plugin : public CANHardwarePlugin
 	{
 	public:
 		/// @brief Constructor for the FlexCANT4Plugin
-		/// @param[in] channel The channel to use on the device
+		/// @param[in] channel The channel to use on the device, see the class description
 		explicit FlexCANT4Plugin(std::uint8_t channel);
 
 		/// @brief The destructor for FlexCANT4Plugin, stops the receive interrupt handing frames to this plugin
@@ -87,13 +103,33 @@ namespace isobus
 
 		static FlexCANT4Plugin *openPlugins[3]; ///< The plugin that opened each channel, for the interrupt handlers
 
+		// The controllers, each created on the first open() of its channel and kept from then on,
+		// because FlexCAN_T4 can't stop its interrupt. A FlexCAN_T4 object holds its frame queues,
+		// so it is large: a program only pays for the channels it opens, and on the heap, not in
+		// static RAM. The receive queue has the smallest size FlexCAN_T4 allows, because FlexCAN_T4
+		// only fills it for events(), which this plugin doesn't use: the FIFO interrupt hands each
+		// frame straight to receiveQueue. The transmit queue is used, for bursts such as an object
+		// pool upload; FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE sets its size.
+		static_assert((FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE >= 2) && (FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE <= 1024) &&
+		                ((FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE & (FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE - 1)) == 0),
+		              "FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE must be one of FlexCAN_T4's sizes: 2, 4, 8 and so on up to 1024");
+
+		/// @brief A controller with this plugin's queue sizes
+		template<CAN_DEV_TABLE Bus>
+		using Controller = FlexCAN_T4<Bus, RX_SIZE_2, static_cast<FLEXCAN_TXQUEUE_TABLE>(FLEXCAN_T4_PLUGIN_TX_QUEUE_SIZE)>;
+
 #if defined(__IMXRT1062__)
-		static FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_512> can0;
-		static FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_512> can1;
-		static FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_512> can2;
-#elif defined(__MK20DX256__) || defined(__MK64FX512__) || defined(__MK66FX1M0__)
-		static FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_512> can0;
-		static FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_512> can1;
+		static constexpr std::uint8_t CONTROLLER_COUNT = 3; ///< The CAN controllers the board has
+		static Controller<CAN1> *can0;
+		static Controller<CAN2> *can1;
+		static Controller<CAN3> *can2;
+#elif defined(__MK66FX1M0__)
+		static constexpr std::uint8_t CONTROLLER_COUNT = 2; ///< The CAN controllers the board has
+		static Controller<CAN0> *can0;
+		static Controller<CAN1> *can1;
+#elif defined(__MK20DX256__) || defined(__MK64FX512__)
+		static constexpr std::uint8_t CONTROLLER_COUNT = 1; ///< The CAN controllers the board has
+		static Controller<CAN0> *can0;
 #endif
 		std::uint8_t selectedChannel; ///< The channel that this plugin is assigned to
 		bool isOpen = false; ///< Tracks if the connection is open/connected
