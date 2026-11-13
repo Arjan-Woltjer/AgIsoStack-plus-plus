@@ -1,30 +1,76 @@
 //================================================================================================
 /// @file flex_can_t4_plugin.cpp
 ///
-/// @brief An interface for using Teensy4/4.1 CAN hardware
+/// @brief An interface for using Teensy 4.0/4.1 and Teensy 3.2/3.5/3.6 CAN hardware
 /// @author Adrian Del Grosso
 ///
 /// @copyright 2023 The Open-Agriculture Developers
 //================================================================================================
 
-// Teensy 4.x only: the Teensy 3.x declarations in the header use bus names FlexCAN_T4 rejects there
-#if defined(__IMXRT1062__)
+// The Teensy boards with CAN controllers: 4.0/4.1, 3.6, and 3.2/3.5
+#if defined(__IMXRT1062__) || defined(__MK66FX1M0__) || defined(__MK20DX256__) || defined(__MK64FX512__)
 #include "isobus/hardware_integration/flex_can_t4_plugin.hpp"
 #include "FlexCAN_T4.hpp"
 #include "isobus/isobus/can_stack_logger.hpp"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 
 namespace isobus
 {
+	namespace
+	{
+		/// @brief Creates a controller object the first time its channel opens, and returns it
+		/// @param[in, out] controller The controller's pointer, set when the object is created
+		/// @returns The controller, or nullptr if there was no memory for it
+		template<typename Controller>
+		Controller *get_or_create_controller(Controller *&controller)
+		{
+			if (nullptr == controller)
+			{
+				// malloc rather than new, so the nullptr check stays: the compiler may assume a
+				// plain new never returns nullptr, and the Teensy core's new just returns malloc's result
+				void *memory = std::malloc(sizeof(Controller));
+				if (nullptr != memory)
+				{
+					controller = new (memory) Controller();
+				}
+			}
+			return controller;
+		}
+
+		/// @brief Starts a controller at 250 kbit/s, receiving through its FIFO interrupt
+		/// @param[in, out] controller The controller's pointer, set if the object didn't exist yet
+		/// @param[in] receiveHandler The interrupt-side receive handler for the controller's channel
+		/// @returns `true` if the controller was started, `false` if there was no memory for it
+		template<typename Controller>
+		bool start_controller(Controller *&controller, _MB_ptr receiveHandler)
+		{
+			Controller *bus = get_or_create_controller(controller);
+			if (nullptr == bus)
+			{
+				return false;
+			}
+			bus->begin();
+			bus->setBaudRate(250000);
+			bus->enableFIFO();
+			bus->enableFIFOInterrupt();
+			bus->onReceive(receiveHandler);
+			return true;
+		}
+	}
+
 #if defined(__IMXRT1062__)
-	FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_512> FlexCANT4Plugin::can0;
-	FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_512> FlexCANT4Plugin::can1;
-	FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_512> FlexCANT4Plugin::can2;
-#elif defined(__MK20DX256__) || defined(__MK64FX512__) || defined(__MK66FX1M0__)
-	FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_512> FlexCANT4Plugin::can0;
-	FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_512> FlexCANT4Plugin::can1;
+	FlexCANT4Plugin::Controller<CAN1> *FlexCANT4Plugin::can0 = nullptr;
+	FlexCANT4Plugin::Controller<CAN2> *FlexCANT4Plugin::can1 = nullptr;
+	FlexCANT4Plugin::Controller<CAN3> *FlexCANT4Plugin::can2 = nullptr;
+#elif defined(__MK66FX1M0__)
+	FlexCANT4Plugin::Controller<CAN0> *FlexCANT4Plugin::can0 = nullptr;
+	FlexCANT4Plugin::Controller<CAN1> *FlexCANT4Plugin::can1 = nullptr;
+#else
+	FlexCANT4Plugin::Controller<CAN0> *FlexCANT4Plugin::can0 = nullptr;
 #endif
 
 	FlexCANT4Plugin *FlexCANT4Plugin::openPlugins[3] = { nullptr, nullptr, nullptr };
@@ -76,41 +122,39 @@ namespace isobus
 		receiveOverflowCount = 0;
 		std::atomic_signal_fence(std::memory_order_release);
 
+		if (selectedChannel >= CONTROLLER_COUNT)
+		{
+			LOG_CRITICAL("[FlexCAN]: Invalid Channel Selected");
+			return;
+		}
+
+		openPlugins[selectedChannel] = this;
+		bool started = false;
 		if (0 == selectedChannel)
 		{
-			openPlugins[0] = this;
-			can0.begin();
-			can0.setBaudRate(250000);
-			can0.enableFIFO();
-			can0.enableFIFOInterrupt();
-			can0.onReceive(on_receive_channel_0);
-			isOpen = true;
+			started = start_controller(can0, on_receive_channel_0);
 		}
+#if defined(__IMXRT1062__) || defined(__MK66FX1M0__)
 		else if (1 == selectedChannel)
 		{
-			openPlugins[1] = this;
-			can1.begin();
-			can1.setBaudRate(250000);
-			can1.enableFIFO();
-			can1.enableFIFOInterrupt();
-			can1.onReceive(on_receive_channel_1);
-			isOpen = true;
+			started = start_controller(can1, on_receive_channel_1);
 		}
+#endif
 #if defined(__IMXRT1062__)
 		else if (2 == selectedChannel)
 		{
-			openPlugins[2] = this;
-			can2.begin();
-			can2.setBaudRate(250000);
-			can2.enableFIFO();
-			can2.enableFIFOInterrupt();
-			can2.onReceive(on_receive_channel_2);
-			isOpen = true;
+			started = start_controller(can2, on_receive_channel_2);
 		}
 #endif
+
+		if (started)
+		{
+			isOpen = true;
+		}
 		else
 		{
-			LOG_CRITICAL("[FlexCAN]: Invalid Channel Selected");
+			openPlugins[selectedChannel] = nullptr;
+			LOG_CRITICAL("[FlexCAN]: Not enough memory for the CAN controller");
 		}
 	}
 
@@ -200,21 +244,24 @@ namespace isobus
 		message.seq = true; // Ask for sequential transmission
 		memcpy(message.buf, canFrame.data, canFrame.dataLength);
 
-		if (0 == selectedChannel)
+		// A controller exists only once its channel has been opened
+		if ((0 == selectedChannel) && (nullptr != can0))
 		{
-			retVal = can0.write(message);
+			retVal = can0->write(message);
 		}
-		else if (1 == selectedChannel)
+#if defined(__IMXRT1062__) || defined(__MK66FX1M0__)
+		else if ((1 == selectedChannel) && (nullptr != can1))
 		{
-			retVal = can1.write(message);
+			retVal = can1->write(message);
 		}
+#endif
 #if defined(__IMXRT1062__)
-		else if (2 == selectedChannel)
+		else if ((2 == selectedChannel) && (nullptr != can2))
 		{
-			retVal = can2.write(message);
+			retVal = can2->write(message);
 		}
 #endif
 		return retVal;
 	}
 }
-#endif // __IMXRT1062__
+#endif // Teensy 4.0/4.1, 3.6, 3.2/3.5
