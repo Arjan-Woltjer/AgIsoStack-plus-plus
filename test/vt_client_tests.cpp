@@ -461,7 +461,7 @@ TEST_F(VirtualTerminalTest, PopulatedPreferredAssignmentsIncludePacketPadding)
 		{
 			expected.insert(expected.end(), { 2, 1, 0x78, 0x56 });
 		}
-		expected.resize(24, 0xFF);
+		// SPIKE: 17 and 21 bytes, sent with the length they have.
 		EXPECT_EQ(expected, receive_ecu_to_vt_payload(can, time_source));
 	}
 }

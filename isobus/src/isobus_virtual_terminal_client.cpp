@@ -2718,9 +2718,14 @@ namespace isobus
 			}
 		}
 		snapshot.message[1] = static_cast<std::uint8_t>(snapshot.devices.size());
-		// ISO 11783-6, 4.6.26 requires padding to the next eight-byte boundary.
-		const auto paddedLength = ((snapshot.message.size() + CAN_DATA_LENGTH - 1) / CAN_DATA_LENGTH) * CAN_DATA_LENGTH;
-		snapshot.message.resize(paddedLength, 0xFF);
+		// SPIKE: no padding past the message's own length. A message that fits one frame is still
+		// filled to eight bytes; a longer one goes out through the transport protocol with the
+		// length it has. Upstream pads to the next eight-byte boundary, which a CNH VT rejected
+		// with "any other error" (24 bytes announced for a 21-byte command).
+		if (snapshot.message.size() < CAN_DATA_LENGTH)
+		{
+			snapshot.message.resize(CAN_DATA_LENGTH, 0xFF);
+		}
 		auxiliaryAssignmentTransaction = std::move(snapshot);
 		return true;
 	}
